@@ -1,0 +1,116 @@
+VSI bug report: SYS$PKDDRIVER never accepts an AHCI disk back after one command time-out
+(OpenVMS x86-64 E9.2-4 field test and V9.2-3). Published 19-NOV-2026.
+
+In this repository:
+
+Report:  report.md                      the bug report (16/17-NOV-2026)
+
+Companion documents, written for a human reader:
+         step-by-step-reproduction.md   how to make it happen, what should happen, what does
+         step-by-step-evidence.md       the same steps with log, trace and SDA extracts, to the root cause
+         README.md                      summary, our stack, a quick reproduction on a data disk
+
+In the release dumps-2026-11 (gzipped; SHA-256 at the end of this file and in the release):
+
+   node2-SYSDUMP-20261115-2238-H5HANG-SDACOPY.DMP               hang after a host suspend, OPERCRASH, 15-NOV 22:38
+   node2-SYSDUMP-20261118-1105-T1-INCONSTATE-DKA100-SDACOPY.DMP INCONSTATE after IPC> C DKA100, data disk, 18-NOV 11:05
+   Both made on the node with SDA COPY from the original dumps (listed under 7 below).
+
+Available on request, not uploaded.  Source = our lab's evidence folders, named by date and test.
+
+1. VSI$SUPPORT.COM reports (HTML) from X86924 and X86923      to VSI only: they contain licence (PAK) data
+
+2. SDA output
+   sda/node2-h4_sda1.txt   early dump, 1.8 s after the two failures   2026-11-15-h6loop-H4/
+   sda/node2-h5_sda1.txt   hang dump                                  2026-11-15-h6loop-H5/
+   sda/node2-map1.txt      SDA MAP results                            2026-11-16-boottrap/
+   sda/node2-map2.txt                                                 2026-11-16-boottrap/
+   sda/node2-map3.txt                                                 2026-11-16-boottrap/
+   sda/node2-inc_sda1.txt  INCONSTATE dump after IPC> C DKA0, 14-NOV 04:17   2026-11-14-hang4/
+   sda/esxi2-healthy-base2.txt  live SDA, healthy per-disk field (0000000A), E9.2-4 ESXi guest
+                                                                      2026-11-16-esxi2-stall1/
+
+3. Trap logs
+   traps/boottrap.log      write trap across a boot                   2026-11-16-boottrap/
+   traps/stop-01.txt .. stop-03.txt   write trap across a time-out    2026-11-16-stall3-fieldtrap/
+                           (registers and stacks)
+
+4. Throttle test logs (stalltest.log; renamed: version, run, write limit in bytes/s).
+   Report section 4 table, in order:
+   stalltests/stalltest-E924-run1-65536-8192.log   E9.2-4, 65,536 then 8,192: no effect     2026-11-16-stall1/
+   stalltests/stalltest-E924-run2-4096.log         E9.2-4, 4,096: port reset 26.52 s, hang  2026-11-16-stall2/
+   stalltests/stalltest-E924-run3-4096-trap.log    E9.2-4, 4,096 repeated, stopped by trap  2026-11-16-stall3-fieldtrap/
+   stalltests/stalltest-V923-run1-4096.log         V9.2-3, 4,096: no effect                 2026-11-16-node1-stall1/
+   stalltests/stalltest-V923-run2-1024.log         V9.2-3, 1,024: port reset 25.87 s, hang  2026-11-16-node1-stall2/
+   Report section 7 (host with a stable TSC, same held-write test still hangs):
+   stalltests/stalltest-E924-stableTSC-4096.log                                             2026-11-16-stableTSC/
+
+   AHCI register sequences extracted from the host traces (summary.txt; renamed):
+   traces/summary-E924-run2-4096.txt    E9.2-4 run 2 (report section 5's port-reset table)   2026-11-16-stall2/kvmtrace-stall2/
+   traces/summary-V923-runs1-2.txt      V9.2-3 runs 1 and 2                           2026-11-16-node1-stall2/kvmtrace-node1/
+   traces/node1-hang-ahci.txt           AHCI slot read in a hang: CHECK POWER MODE, status 50   2026-11-16-node1-stall2/
+
+5. Tests of 18/19-NOV-2026: the same stall behind three port drivers      2026-11-18-node2-disks/
+   (T1 AHCI data disk, T2 and T5 virtio-scsi, T3 iSCSI; results in README)
+   sdabase1.com .. sdabase3.com, sdabase1.out   baseline SDA of the three data disks
+   timeline-T1.log                 host recorder, 2 s: suspend state, I/O counts, iSCSI connections (T1-T3)
+   T1-hang-sda.txt                 T1: live SDA of the hung AHCI data disk (field 0000000A -> 00000002)
+   T1-inconstate-sda.txt           T1: SDA of the INCONSTATE dump
+   T3-after.txt, T3-errlog.txt     T3: iSCSI disk afterwards; error log
+   T3-anadisk.txt, T3b-after-anadisk.txt   T3: ANALYZE/DISK_STRUCTURE
+   dell-sysrq-w.txt, dell-lio-stacks-2045.txt   host: Linux LIO target deadlock after T3 (a Linux bug)
+   opercrash-2030-sda.txt          SDA of the forced crash that freed the iSCSI disk
+   T5-baseline-dkb2.txt            T5: virtio-scsi disk before the stall
+   T5-timeouts.txt, T5-timeouts2.txt   SYSGEN and SCDT time-outs, AHCI and virtio-scsi disks
+   timeline-T5.log, timeline-T5-long.log   host recorder, 2 s, 18-NOV 22:15 to 19-NOV 10:54
+   T5-morning-0720.txt             T5: after 10 h 58 min, one write queued, no mount verification
+   T5-after-resume.txt, T5-anadisk-dkb2.txt   T5: after the release; ANALYZE/DISK_STRUCTURE
+
+6. Guest console logs (node2, time-stamped by the host)                   console/
+   node2-20261114-*.log .. node2-20261118-110940.log   14-NOV to 19-NOV, 18 files
+
+7. System dumps (raw copies of SYSDUMP.DMP, 325,083,136 bytes each; node2, E9.2-4).
+   Each has its error log dump (SYS_ERRLOG, 32,768 bytes), except ff4.
+   node2-SYSDUMP-20261113-1542.DMP                   hang after a host suspend, OPERCRASH, 13-NOV 15:42   2026-11-13-sleep3/dump/
+   node2-SYSDUMP-20261114-0417-INCONSTATE.DMP        INCONSTATE after IPC> C DKA0 (the first), 14-NOV 04:17   2026-11-14-hang4/dump/
+   node2-SYSDUMP-20261114-1330-OPERCRASH.DMP         hang 5, OPERCRASH, 14-NOV 13:30   2026-11-14-hang5/dump/
+   node2-SYSDUMP-20261114-ff4-OPERCRASH.DMP          hang in round 4 of the SET TIME tests, OPERCRASH, 14-NOV 14:02   2026-11-14-ff4/dump/
+   node2-SYSDUMP-20261114-2153-INCONSTATE.DMP        INCONSTATE after IPC> C DKA0, 14-NOV 21:53   2026-11-14-c2/dump/
+   node2-SYSDUMP-20261115-0756-OPERCRASH.DMP         hang 6, OPERCRASH, all processes, 15-NOV 07:56   2026-11-15-hang6/dump/
+   node2-SYSDUMP-20261115-1023-INCONSTATE-1CPU.DMP   INCONSTATE after IPC> C DKA0, one CPU, 15-NOV 10:23   2026-11-15-onecpu/dump/
+   node2-SYSDUMP-20261115-1114-PGFIPLHI-XDELTA.DMP   PGFIPLHI during XDelta practice (not this bug), 15-NOV 11:14   2026-11-15-xdelta/dump/
+   node2-SYSDUMP-20261115-1402-C3HANG.DMP            hang in debug-stop run C3, 15-NOV 14:02   2026-11-15-xdelta/c3-debugstop/vmsdump/
+   node2-SYSDUMP-20261115-1501-T2HANG.DMP            hang in trap run T2, 15-NOV 15:01   2026-11-15-trap2/vmsdump/
+   node2-SYSDUMP-20261115-1911-T8HANG.DMP            hang in trap run T8, 15-NOV 19:11   2026-11-15-trap3/vmsdump/
+   node2-SYSDUMP-20261115-2000-H1HANG.DMP            write loop + host suspend, round H1, 15-NOV 20:00   2026-11-15-h6loop-H2/vmsdump/
+   node2-SYSDUMP-20261115-2030-H2HANG.DMP            round H2, 15-NOV 20:30   2026-11-15-h6loop-H3/vmsdump/
+   node2-SYSDUMP-20261115-2054-H3HANG.DMP            round H3, 15-NOV 20:54   2026-11-15-h6loop-H4/vmsdump/
+   node2-SYSDUMP-20261115-2157-H4-EARLY.DMP          the early dump, 1.8 s after the two failures, 15-NOV 21:57   2026-11-15-h6loop-H4/vmsdump/
+   node2-SYSDUMP-20261115-2238-H5HANG.DMP            hang after a host suspend, 15-NOV 22:38 (published as SDA copy)   2026-11-15-h6loop-H5/vmsdump/
+   node2-SYSDUMP-20261116-0627-STALL2HANG.DMP        hang after a throttle time-out, 16-NOV 06:27   2026-11-16-stall2/vmsdump/
+   node2-SYSDUMP-20261116-0646-STALL3HANG.DMP        hang after a throttle time-out, with the field trap, 16-NOV 06:46   2026-11-16-stall3-fieldtrap/vmsdump/
+   node2-SYSDUMP-20261118-1105-T1-INCONSTATE-DKA100.DMP   INCONSTATE after IPC> C DKA100, data disk, 18-NOV 11:05 (published as SDA copy)   2026-11-18-node2-disks/vmsdump/
+   node2-SYSDUMP-20261118-2030-OPERCRASH-DZA300.DMP  OPERCRASH to free the iSCSI disk after the LIO deadlock (not this bug), 18-NOV 20:30   2026-11-18-node2-disks/vmsdump/
+
+8. Raw host-side captures and working files, by folder
+   2026-11-13-sleep3 .. sleep9      host suspend tests: QEMU/AHCI state samples, wake watcher, QEMU AHCI trace events
+   2026-11-14-kvmtrace-1 .. -3, kvmtrace-cal .. -cal3   KVM event traces (AHCI MMIO, MSI) of hangs and calibration runs
+   2026-11-14-hang4, -hang5, -hang5-trace   live hangs: QEMU state, SDA, host kernel trace
+   2026-11-14-control, -pause, -pauserounds, -night, -fastff, -ff5, -mpdev   timer-queue and clock tests (the hourly poll, ruled out)
+   2026-11-14-sysgen                SYSGEN parameter listings
+   2026-11-15-h6loop, -H2 .. -H5    write loop + host suspend rounds: register captures, QEMU memory images (ELF)
+   2026-11-15-trap2, -trap3, -xdelta   watchpoint and XDelta runs: captures, memory images
+   2026-11-15-healthy-2210          healthy baseline of the SCSI structures
+   2026-11-16-boottrap              write trap on the field across a boot (89 stop records)
+   2026-11-16-stall1 .. -stall3-fieldtrap, -stableTSC   throttle tests on E9.2-4: logs, KVM traces, address files
+   2026-11-16-node1-stall1, -stall2   throttle tests on V9.2-3: logs, KVM traces
+   2026-11-16-esxi2-stall1          live SDA of the E9.2-4 ESXi guest's AHCI disk (healthy baseline)
+   2026-11-16-driver-images         SYS$PKDDRIVER.EXE and SYS$DKDRIVER.EXE as installed, with routine and frame lists
+
+SHA-256 of the published dumps:
+   uncompressed
+   fb6afa335bffbfebc67de6cbf53ec3edb8cd4cfa125f1dff06d50918f4d585f5  node2-SYSDUMP-20261115-2238-H5HANG-SDACOPY.DMP
+   c0085ae0d60e6d476dfd54a4c7e6fb50eecae38d7a5c5a612e31cc1965db21d4  node2-SYSDUMP-20261118-1105-T1-INCONSTATE-DKA100-SDACOPY.DMP
+   gzipped (as in the release)
+   a103646313d98cdab87796bfdf3b905994de62bbda3af821405869d9d7ecb31d  node2-SYSDUMP-20261115-2238-H5HANG-SDACOPY.DMP.gz
+   d76967908347e7400fdc2b4bb81f0e77250b04b30016d25943050fcc34d30a2d  node2-SYSDUMP-20261118-1105-T1-INCONSTATE-DKA100-SDACOPY.DMP.gz
